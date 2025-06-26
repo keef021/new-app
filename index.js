@@ -1,17 +1,20 @@
-const { Client, GatewayIntentBits, Collection, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, Partials, REST, Routes } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
 
-// Configuração do servidor web para Render
+// Configuração do servidor web
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.use(express.json());
+
 app.get('/', (req, res) => {
   res.json({ 
-    status: 'Bot Discord rodando',
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString()
+    status: 'Bot Discord Online',
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    version: '2.0.0'
   });
 });
 
@@ -19,136 +22,290 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy',
     bot: client.user ? 'online' : 'offline',
-    guilds: client.guilds.cache.size
+    guilds: client.guilds?.cache.size || 0,
+    ping: client.ws.ping
   });
 });
 
-// Inicializa o cliente Discord
+app.get('/stats', (req, res) => {
+  if (!client.user) return res.status(503).json({ error: 'Bot offline' });
+  
+  res.json({
+    guilds: client.guilds.cache.size,
+    users: client.users.cache.size,
+    channels: client.channels.cache.size,
+    uptime: Math.floor(process.uptime()),
+    memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB'
+  });
+});
+
+// Cliente Discord
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds, 
     GatewayIntentBits.GuildMessages, 
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
   ],
-  partials: [Partials.Channel]
+  partials: [Partials.Channel, Partials.Message]
 });
 
-// Coleção para armazenar comandos
 client.commands = new Collection();
+client.cooldowns = new Collection();
 
-// Função para carregar comandos
+// Sistema de logs
+const log = {
+  info: (msg) => console.log(`[INFO] ${new Date().toLocaleString()} - ${msg}`),
+  error: (msg) => console.error(`[ERROR] ${new Date().toLocaleString()} - ${msg}`),
+  warn: (msg) => console.warn(`[WARN] ${new Date().toLocaleString()} - ${msg}`),
+  success: (msg) => console.log(`[SUCCESS] ${new Date().toLocaleString()} - ${msg}`)
+};
+
+// Carregar comandos
 function loadCommands() {
+  const commands = [];
+  
   try {
+    if (!fs.existsSync('./commands')) {
+      fs.mkdirSync('./commands', { recursive: true });
+      log.warn('Diretório commands criado');
+    }
+    
     const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
-    console.log(`Carregando ${commandFiles.length} comandos...`);
+    
+    if (commandFiles.length === 0) {
+      log.warn('Nenhum comando encontrado');
+      return [];
+    }
+    
+    log.info(`Carregando ${commandFiles.length} comandos...`);
     
     for (const file of commandFiles) {
       try {
-        delete require.cache[require.resolve(`./commands/${file}`)];
-        const command = require(`./commands/${file}`);
-        client.commands.set(command.data.name, command);
-        console.log(`✅ Comando carregado: ${command.data.name}`);
+        const filePath = path.join(__dirname, 'commands', file);
+        delete require.cache[require.resolve(filePath)];
+        
+        const command = require(filePath);
+        
+        if ('data' in command && 'execute' in command) {
+          client.commands.set(command.data.name, command);
+          commands.push(command.data.toJSON());
+          log.success(`Comando carregado: ${command.data.name}`);
+        } else {
+          log.warn(`Comando ${file} está faltando propriedades obrigatórias`);
+        }
       } catch (error) {
-        console.error(`❌ Erro ao carregar comando ${file}:`, error);
+        log.error(`Erro ao carregar comando ${file}: ${error.message}`);
       }
     }
   } catch (error) {
-    console.error('❌ Erro ao ler diretório de comandos:', error);
+    log.error(`Erro ao ler diretório de comandos: ${error.message}`);
   }
+  
+  return commands;
 }
 
-// Função para carregar eventos
+// Carregar eventos
 function loadEvents() {
   try {
+    if (!fs.existsSync('./events')) {
+      fs.mkdirSync('./events', { recursive: true });
+      log.warn('Diretório events criado');
+    }
+    
     const eventFiles = fs.readdirSync('./events').filter(file => file.endsWith('.js'));
-    console.log(`Carregando ${eventFiles.length} eventos...`);
+    
+    if (eventFiles.length === 0) {
+      log.warn('Nenhum evento encontrado');
+      return;
+    }
+    
+    log.info(`Carregando ${eventFiles.length} eventos...`);
     
     for (const file of eventFiles) {
       try {
-        delete require.cache[require.resolve(`./events/${file}`)];
-        const event = require(`./events/${file}`);
-        client.on(event.name, (...args) => event.execute(...args, client));
-        console.log(`✅ Evento carregado: ${event.name}`);
+        const filePath = path.join(__dirname, 'events', file);
+        delete require.cache[require.resolve(filePath)];
+        
+        const event = require(filePath);
+        
+        if (event.once) {
+          client.once(event.name, (...args) => event.execute(...args, client));
+        } else {
+          client.on(event.name, (...args) => event.execute(...args, client));
+        }
+        
+        log.success(`Evento carregado: ${event.name}`);
       } catch (error) {
-        console.error(`❌ Erro ao carregar evento ${file}:`, error);
+        log.error(`Erro ao carregar evento ${file}: ${error.message}`);
       }
     }
   } catch (error) {
-    console.error('❌ Erro ao ler diretório de eventos:', error);
+    log.error(`Erro ao ler diretório de eventos: ${error.message}`);
   }
 }
 
-// Carrega comandos e eventos
-loadCommands();
-loadEvents();
+// Registrar comandos slash
+async function deployCommands() {
+  const commands = loadCommands();
+  
+  if (commands.length === 0) {
+    log.warn('Nenhum comando para registrar');
+    return;
+  }
+  
+  const rest = new REST().setToken(process.env.DISCORD_TOKEN);
+  
+  try {
+    log.info('Registrando comandos slash...');
+    
+    // Registra globalmente (demora até 1 hora)
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      { body: commands }
+    );
+    
+    // Se tiver guild específica, registra lá também (instantâneo)
+    if (process.env.GUILD_ID) {
+      await rest.put(
+        Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
+        { body: commands }
+      );
+    }
+    
+    log.success(`${commands.length} comandos registrados com sucesso`);
+  } catch (error) {
+    log.error(`Erro ao registrar comandos: ${error.message}`);
+  }
+}
 
-// Handler para interações de comandos
+// Sistema de cooldown
+function checkCooldown(userId, commandName) {
+  const cooldowns = client.cooldowns;
+  
+  if (!cooldowns.has(commandName)) {
+    cooldowns.set(commandName, new Collection());
+  }
+  
+  const now = Date.now();
+  const timestamps = cooldowns.get(commandName);
+  const cooldownAmount = 3000; // 3 segundos
+  
+  if (timestamps.has(userId)) {
+    const expirationTime = timestamps.get(userId) + cooldownAmount;
+    
+    if (now < expirationTime) {
+      const timeLeft = (expirationTime - now) / 1000;
+      return timeLeft;
+    }
+  }
+  
+  timestamps.set(userId, now);
+  setTimeout(() => timestamps.delete(userId), cooldownAmount);
+  
+  return false;
+}
+
+// Handler de interações
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
   
   const command = client.commands.get(interaction.commandName);
   if (!command) return;
   
+  // Verificar cooldown
+  const cooldownTime = checkCooldown(interaction.user.id, interaction.commandName);
+  if (cooldownTime) {
+    return interaction.reply({
+      content: `⏱️ Aguarde ${cooldownTime.toFixed(1)}s antes de usar este comando novamente.`,
+      ephemeral: true
+    });
+  }
+  
   try {
     await command.execute(interaction, client);
+    log.info(`Comando ${interaction.commandName} executado por ${interaction.user.tag}`);
   } catch (error) {
-    console.error(`Erro ao executar comando ${interaction.commandName}:`, error);
+    log.error(`Erro no comando ${interaction.commandName}: ${error.message}`);
     
-    const errorMessage = {
-      content: 'Houve um erro ao executar este comando!',
-      ephemeral: true
+    const errorEmbed = {
+      embeds: [{
+        title: '❌ Erro',
+        description: 'Houve um erro ao executar este comando.',
+        color: 0xED4245,
+        timestamp: new Date().toISOString()
+      }]
     };
     
     try {
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(errorMessage);
+        await interaction.followUp({ ...errorEmbed, ephemeral: true });
       } else {
-        await interaction.reply(errorMessage);
+        await interaction.reply({ ...errorEmbed, ephemeral: true });
       }
     } catch (followUpError) {
-      console.error('Erro ao enviar mensagem de erro:', followUpError);
+      log.error(`Erro ao enviar mensagem de erro: ${followUpError.message}`);
     }
   }
 });
 
-// Evento quando o bot fica online
-client.once('ready', () => {
-  console.log(`🤖 Bot online como ${client.user.tag}`);
-  console.log(`📊 Conectado em ${client.guilds.cache.size} servidor(s)`);
-  console.log(`👥 Usuários alcançados: ${client.users.cache.size}`);
+// Evento ready
+client.once('ready', async () => {
+  log.success(`Bot online: ${client.user.tag}`);
+  log.info(`Servidores: ${client.guilds.cache.size}`);
+  log.info(`Usuários: ${client.users.cache.size}`);
+  
+  // Registrar comandos após estar online
+  await deployCommands();
+  
+  // Status do bot
+  client.user.setActivity('Sistema de Tickets', { type: 'WATCHING' });
 });
+
+// Carregar eventos
+loadEvents();
 
 // Tratamento de erros
-client.on('error', error => {
-  console.error('Erro do cliente Discord:', error);
+client.on('error', error => log.error(`Cliente Discord: ${error.message}`));
+client.on('warn', warning => log.warn(`Cliente Discord: ${warning}`));
+
+process.on('unhandledRejection', (reason, promise) => {
+  log.error(`Unhandled Rejection: ${reason}`);
 });
 
-client.on('warn', warning => {
-  console.warn('Aviso do cliente Discord:', warning);
-});
-
-process.on('unhandledRejection', error => {
-  console.error('Unhandled Promise Rejection:', error);
-});
-
-process.on('uncaughtException', error => {
-  console.error('Uncaught Exception:', error);
+process.on('uncaughtException', (error) => {
+  log.error(`Uncaught Exception: ${error.message}`);
   process.exit(1);
 });
 
-// Inicia o servidor web
-app.listen(PORT, () => {
-  console.log(`🌐 Servidor web rodando na porta ${PORT}`);
+// Graceful shutdown
+process.on('SIGINT', () => {
+  log.info('Recebido SIGINT, desligando...');
+  client.destroy();
+  process.exit(0);
 });
 
-// Faz login no Discord
+process.on('SIGTERM', () => {
+  log.info('Recebido SIGTERM, desligando...');
+  client.destroy();
+  process.exit(0);
+});
+
+// Iniciar servidor web
+app.listen(PORT, () => {
+  log.info(`Servidor web rodando na porta ${PORT}`);
+});
+
+// Login no Discord
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
-  console.error('❌ Token do Discord não encontrado! Configure a variável de ambiente DISCORD_TOKEN');
+  log.error('Token do Discord não encontrado! Configure DISCORD_TOKEN');
   process.exit(1);
 }
 
 client.login(token).catch(error => {
-  console.error('❌ Erro ao fazer login:', error);
+  log.error(`Erro ao fazer login: ${error.message}`);
   process.exit(1);
 });
+
+module.exports = client;
