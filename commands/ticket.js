@@ -1,142 +1,34 @@
-const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('ticket')
-    .setDescription('Gerenciar tickets')
-    .addSubcommand(subcommand =>
-      subcommand
-        .setName('fechar')
-        .setDescription('Fechar o ticket atual'))
-    .addSubcommand(subcommand =>
-      subcommand
-        .setName('adicionar')
-        .setDescription('Adicionar usuário ao ticket')
-        .addUserOption(option =>
-          option.setName('usuario')
-            .setDescription('Usuário para adicionar')
-            .setRequired(true)))
-    .addSubcommand(subcommand =>
-      subcommand
-        .setName('remover')
-        .setDescription('Remover usuário do ticket')
-        .addUserOption(option =>
-          option.setName('usuario')
-            .setDescription('Usuário para remover')
-            .setRequired(true)))
-    .addSubcommand(subcommand =>
-      subcommand
-        .setName('transcript')
-        .setDescription('Gerar transcrição do ticket'))
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
-
+    .setDescription('Gerenciar tickets com botões'),
   async execute(interaction) {
-    // Verifica se está em um ticket
-    if (!interaction.channel.name.startsWith('ticket-')) {
-      return interaction.reply({
-        embeds: [{
-          title: '❌ Erro',
-          description: 'Este comando só pode ser usado em canais de ticket.',
-          color: 0xED4245
-        }],
-        ephemeral: true
-      });
-    }
+    const embed = new EmbedBuilder()
+      .setTitle('🎟️ Sistema de Tickets')
+      .setDescription('Use os botões abaixo para interagir com o sistema de tickets.')
+      .setColor(0x5865F2);
 
-    const subcommand = interaction.options.getSubcommand();
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('fechar_ticket')
+        .setLabel('Fechar')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId('add_user')
+        .setLabel('Adicionar Usuário')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('ticket_transcript')
+        .setLabel('Transcript')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('claim_ticket')
+        .setLabel('Claim')
+        .setStyle(ButtonStyle.Success)
+    );
 
-    if (subcommand === 'fechar') {
-      const embed = new EmbedBuilder()
-        .setTitle('🔒 Ticket Fechado')
-        .setDescription(`Ticket fechado por ${interaction.user}`)
-        .setColor(0xFEE75C)
-        .setTimestamp();
-
-      await interaction.reply({ embeds: [embed] });
-
-    } else if (subcommand === 'adicionar') {
-      const usuario = interaction.options.getUser('usuario');
-      
-      try {
-        await interaction.channel.permissionOverwrites.edit(usuario.id, {
-          ViewChannel: true,
-          SendMessages: true,
-          ReadMessageHistory: true
-        });
-
-        const embed = new EmbedBuilder()
-          .setTitle('✅ Usuário Adicionado')
-          .setDescription(`${usuario} foi adicionado ao ticket por ${interaction.user}`)
-          .setColor(0x57F287)
-          .setTimestamp();
-
-        await interaction.reply({ embeds: [embed] });
-        
-      } catch (error) {
-        await interaction.reply({
-          embeds: [{
-            title: '❌ Erro',
-            description: 'Não foi possível adicionar o usuário.',
-            color: 0xED4245
-          }],
-          ephemeral: true
-        });
-      }
-
-    } else if (subcommand === 'remover') {
-      const usuario = interaction.options.getUser('usuario');
-      
-      try {
-        await interaction.channel.permissionOverwrites.edit(usuario.id, {
-          ViewChannel: false
-        });
-
-        const embed = new EmbedBuilder()
-          .setTitle('✅ Usuário Removido')
-          .setDescription(`${usuario} foi removido do ticket por ${interaction.user}`)
-          .setColor(0xFEE75C)
-          .setTimestamp();
-
-        await interaction.reply({ embeds: [embed] });
-        
-      } catch (error) {
-        await interaction.reply({
-          embeds: [{
-            title: '❌ Erro',
-            description: 'Não foi possível remover o usuário.',
-            color: 0xED4245
-          }],
-          ephemeral: true
-        });
-      }
-
-    } else if (subcommand === 'transcript') {
-      await interaction.deferReply();
-      
-      try {
-        const messages = await interaction.channel.messages.fetch({ limit: 100 });
-        const transcript = messages.reverse().map(msg => {
-          const timestamp = msg.createdAt.toLocaleString('pt-BR');
-          const author = msg.author.tag;
-          const content = msg.content || '[Anexo/Embed]';
-          return `[${timestamp}] ${author}: ${content}`;
-        }).join('\n');
-        
-        const buffer = Buffer.from(transcript, 'utf8');
-        
-        await interaction.editReply({
-          content: '📝 Transcrição do ticket gerada:',
-          files: [{
-            attachment: buffer,
-            name: `transcript-${interaction.channel.name}-${Date.now()}.txt`
-          }]
-        });
-        
-      } catch (error) {
-        await interaction.editReply({
-          content: '❌ Erro ao gerar transcrição.'
-        });
-      }
-    }
+    await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
   }
 };
