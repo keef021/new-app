@@ -1,23 +1,51 @@
 {
-  "name": "discord-ticket-bot",
-  "version": "1.0.0",
-  "description": "Bot de tickets para Discord",
+  "name": "discord-ticket-bot-enhanced",
+  "version": "2.0.0",
+  "description": "Sistema avançado de tickets para Discord com múltiplas funcionalidades",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "test": "node --check index.js",
+    "deploy": "node deploy-commands.js",
+    "lint": "eslint .",
+    "format": "prettier --write ."
   },
   "dependencies": {
     "discord.js": "^14.14.1",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "fs": "^0.0.1-security",
+    "path": "^0.12.7"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "nodemon": "^3.0.2",
+    "eslint": "^8.55.0",
+    "prettier": "^3.1.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   },
-  "keywords": ["discord", "bot", "tickets"],
-  "author": "Seu Nome",
-  "license": "MIT"
+  "keywords": [
+    "discord",
+    "bot",
+    "tickets",
+    "support",
+    "moderation",
+    "discord.js",
+    "javascript"
+  ],
+  "author": {
+    "name": "Seu Nome",
+    "email": "seu@email.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/seu-usuario/discord-ticket-bot"
+  },
+  "bugs": {
+    "url": "https://github.com/seu-usuario/discord-ticket-bot/issues"
+  },
+  "homepage": "https://github.com/seu-usuario/discord-ticket-bot#readme"
 }
